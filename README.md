@@ -1,71 +1,111 @@
-# fastest-algorithm-ever
+🚀 HPC-RadixSort: Non-Atomic Parallel Radix Sort for C++
 
-Ultimate Optimized Parallel Hybrid Chunked Counting Sort
+A High-Performance, Linear-Time Sorting Solution for 64-bit Integers
 
-Memory-efficient, linear-time sorting for massive 64-bit integer datasets
+HPC-RadixSort is a specialized C++ library designed for performance-critical applications that require the fastest possible sorting of large arrays of fixed-width integers (specifically long long). This implementation leverages OpenMP for highly efficient parallel execution, achieving near-linear time complexity $O(n)$ with minimal synchronization overhead. 
 
-Overview
+Key Technical Advantages
 
-Sorting huge 64-bit integers efficiently is challenging.
-Hybrid Chunked Counting Sort splits numbers into manageable chunks, counts their occurrences, and reconstructs them — now fully optimized and parallelized for maximum speed.
+This is not a general-purpose library sort. It is engineered for low latency and high throughput in HPC and Big Data environments.
 
-Key features:
+Non-Atomic Distribution (Zero Lock Contention):
 
-Linear-time O(n) sorting for 64-bit integers
+Unlike many parallel sorting algorithms that rely on expensive atomic operations or critical sections during the distribution phase, this implementation uses a sophisticated block-partitioning and prefix-sum-based offset calculation.
 
-Efficient memory usage; count arrays fit in CPU cache
+This ensures that each thread writes to a guaranteed non-overlapping section of the output array, achieving true parallelism in the final step.
 
-Parallelized counting using OpenMP, no atomic bottlenecks
+Linear Time Complexity:
 
-Loop-unrolled for faster counting
+Since Radix Sort is a non-comparison algorithm, its complexity is $O(k \cdot n)$, where $k$ (the number of passes/chunks) is a small constant for 64-bit integers.
 
-Stable sorting; preserves original logic
+By dividing the work across $p$ cores, the effective runtime scales as $O(k \cdot n / p)$, making it exceptionally fast for massive datasets.
 
-Handles streaming inserts in real-time
+Optimization Focused:
 
-Benchmarks (8-core CPU)
-Dataset Size	Ultimate Hybrid Chunked Counting Sort	Parallel Radix Sort (Intel TBB / Boost)	Notes
-1 million	~0.2–0.5 ms	~0.5–0.8 ms	Your method slightly faster
-5 million	~1.5–2.5 ms	~3–4 ms	Base 512 reduces passes
-10 million	~5–7 ms	~8–12 ms	Memory-efficient; cache-friendly
-50 million	~30–35 ms	~45–55 ms	Linear scaling shines
-100 million	~70–85 ms	~90–110 ms	Extremely efficient for very large datasets
+Utilizes a base $B=512$ (9 bits) to minimize the number of passes required.
 
-Benchmarks assume 8-core CPU; real numbers may vary with CPU speed, cache size, and memory bandwidth.
+Employs manual loop unrolling (UNROLL = 4) during the counting phase to maximize instruction-level parallelism.
+
+📦 Usage and Compilation
+
+Prerequisites
+
+A C++ compiler supporting the C++11 standard or later (e.g., GCC, Clang).
+
+OpenMP support enabled in the compiler.
+
+Compilation
+
+Compile the source file (chunked_radix_sort.cpp) using the OpenMP flag:
+
+# Compile with g++
+g++ -std=c++17 -O3 -fopenmp chunked_radix_sort.cpp -o hpc_radix_sort
+
+# Run the executable
+./hpc_radix_sort
 
 
--O3 → maximum compiler optimization
+API Reference
 
--fopenmp → enables multi-threading
+The core sorting function is a single, in-place utility:
 
-Usage
-./chunk_sort
+void chunked_radix_sort(vector<long long>& arr);
 
 
-Enter numbers separated by spaces (Ctrl+D/Ctrl+Z to end)
+Parameter
 
-Sorted numbers will be printed to stdout
+Type
 
-How It Works
+Description
 
-Chunking: Numbers are split into bitwise chunks (base = 512) → no division/modulo.
+arr
 
-Parallel Counting: Threads count their block independently; counts merged afterward.
+std::vector<long long>&
 
-Loop Unrolling: Reduces branch instructions in counting.
+The vector of non-negative 64-bit integers to be sorted. Sorting is performed in-place.
 
-Reconstruction: Numbers are placed in output array stably.
+(Note: The current version supports non-negative integers only. A commercial update is planned for full signed integer support.)
 
-Repeat per chunk → all numbers fully sorted.
+📈 Performance Benchmarks (Placeholder)
 
-Why It’s Fast
+NOTE: These are representative performance goals. Actual data to be updated after rigorous testing.
 
-Fewer passes due to base 512 → fewer memory scans
+Dataset Size (N)
 
-Cache-friendly small count arrays → fits in L1/L2
+Algorithm
 
-OpenMP parallelization avoids atomic bottlenecks
+Average Time (Seconds)
 
-Loop unrolling and bitwise operations → CPU cycles minimized
+Speedup vs. std::sort
 
-Preallocated memory avoids runtime allocations
+$10^7$ Random Integers
+
+std::sort (1 Thread)
+
+0.85s
+
+$1.0x$
+
+$10^7$ Random Integers
+
+HPC-RadixSort (8 Threads)
+
+0.15s
+
+$5.6x$
+
+$10^8$ Random Integers
+
+HPC-RadixSort (8 Threads)
+
+1.45s
+
+TBD
+
+⚖️ Licensing
+
+HPC-RadixSort is available under a Dual Licensing Model to suit various development needs:
+
+Open Source License: Available for educational use, non-commercial research, and internal company evaluation.
+
+Commercial License: Required for all companies and organizations integrating this code into proprietary, closed-source products intended for distribution or sale. Please contact us for pricing on Perpetual, Annual Subscription, and Site Licenses.
