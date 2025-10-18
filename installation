@@ -1,0 +1,3 @@
+
+g++ -O3 -fopenmp ultimate_chunked_sort.cpp -o chunk_sort
+./chunk_sort
