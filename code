@@ -1,0 +1,114 @@
+#include <bits/stdc++.h>
+#include <omp.h>
+using namespace std;
+
+const int BASE = 512;        // 2^9 → use bitmask
+const int SHIFT = 9;         // log2(BASE)
+const int UNROLL = 4;        // loop unroll factor
+
+inline int get_chunk(long long num, int chunk_idx) {
+    return (num >> (chunk_idx * SHIFT)) & (BASE - 1);
+}
+
+int count_chunks(long long num) {
+    int c = 0;
+    while (num > 0) {
+        num >>= SHIFT;
+        c++;
+    }
+    return max(c, 1);
+}
+
+void chunked_radix_sort(vector<long long>& arr) {
+    if (arr.empty()) return;
+
+    long long max_val = *max_element(arr.begin(), arr.end());
+    int max_chunks = count_chunks(max_val);
+
+    vector<long long> output(arr.size());
+
+    for (int chunk = 0; chunk < max_chunks; ++chunk) {
+        int n_threads = omp_get_max_threads();
+        vector<vector<long long>> local_counts(n_threads, vector<long long>(BASE, 0));
+
+        // Parallel counting in blocks
+        #pragma omp parallel
+        {
+            int tid = omp_get_thread_num();
+            size_t n = arr.size();
+            size_t block_size = (n + n_threads - 1) / n_threads;
+            size_t start = tid * block_size;
+            size_t end = min(start + block_size, n);
+            vector<long long>& count = local_counts[tid];
+
+            // Loop unrolled counting
+            size_t i = start;
+            for (; i + UNROLL -1 < end; i += UNROLL) {
+                count[get_chunk(arr[i], chunk)]++;
+                count[get_chunk(arr[i+1], chunk)]++;
+                count[get_chunk(arr[i+2], chunk)]++;
+                count[get_chunk(arr[i+3], chunk)]++;
+            }
+            for (; i < end; ++i)
+                count[get_chunk(arr[i], chunk)]++;
+        }
+
+        // Merge local counts
+        vector<long long> count(BASE, 0);
+        for (int t = 0; t < n_threads; ++t)
+            for (int i = 0; i < BASE; ++i)
+                count[i] += local_counts[t][i];
+
+        // Prefix sum
+        for (int i = 1; i < BASE; ++i)
+            count[i] += count[i-1];
+
+        // Build output array in blocks without atomics
+        vector<long long> positions = count;
+        #pragma omp parallel
+        {
+            int tid = omp_get_thread_num();
+            size_t n = arr.size();
+            size_t block_size = (n + n_threads - 1) / n_threads;
+            size_t start = tid * block_size;
+            size_t end = min(start + block_size, n);
+            vector<long long> local_pos(BASE, 0);
+
+            // Compute local positions
+            for (int i = 0; i < BASE; ++i) {
+                long long sum = 0;
+                for (int t = 0; t < tid; ++t)
+                    sum += local_counts[t][i];
+                local_pos[i] = (i == 0 ? 0 : count[i-1]) + sum;
+            }
+
+            // Place numbers
+            for (size_t i = start; i < end; ++i) {
+                int key = get_chunk(arr[i], chunk);
+                output[local_pos[key]++] = arr[i];
+            }
+        }
+
+        arr.swap(output);
+    }
+}
+
+int main() {
+    ios::sync_with_stdio(false);
+    cin.tie(nullptr);
+
+    cout << "Ultimate Optimized Parallel Hybrid Chunked Counting Sort\n";
+    cout << "Enter numbers separated by spaces (Ctrl+D/Ctrl+Z to end):\n";
+
+    vector<long long> numbers;
+    long long x;
+    while (cin >> x) numbers.push_back(x);
+
+    chunked_radix_sort(numbers);
+
+    cout << "\nSorted Numbers:\n";
+    for (long long num : numbers)
+        cout << num << "\n";
+
+    return 0;
+}
