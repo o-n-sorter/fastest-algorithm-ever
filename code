@@ -1,95 +1,121 @@
-#include <bits/stdc++.h>
+ #include <bits/stdc++.h>
 #include <omp.h>
 using namespace std;
 
-const int BASE = 512;        // 2^9 → use bitmask
-const int SHIFT = 9;         // log2(BASE)
-const int UNROLL = 4;        // loop unroll factor
+// --- Configuration Constants ---
+const int BASE = 512;       // Radix (or bucket count): 2^9.
+const int SHIFT = 9;        // log2(BASE).
+const int UNROLL = 4;       // Loop unroll factor: Reduces loop overhead.
 
-inline int get_chunk(long long num, int chunk_idx) {
+// The number of bits in a long long (64 bits).
+const int BITS_PER_NUM = sizeof(long long) * 8;
+// The required number of passes (ceil(64 / 9) = 8 passes). This is fixed for 64-bit data.
+const int MAX_CHUNKS = (BITS_PER_NUM + SHIFT - 1) / SHIFT;
+
+// Helper function to extract the required 'chunk' (or digit) for a given pass.
+// Works on the unsigned representation of the number (which has been MSB-flipped).
+inline int get_chunk(unsigned long long num, int chunk_idx) {
+    // (BASE - 1) is a 9-bit mask (0b111111111) since BASE=512
     return (num >> (chunk_idx * SHIFT)) & (BASE - 1);
 }
 
-int count_chunks(long long num) {
-    int c = 0;
-    while (num > 0) {
-        num >>= SHIFT;
-        c++;
-    }
-    return max(c, 1);
-}
+// MSB Flip Mask: Used for the crucial signed-to-unsigned conversion trick.
+// 1ULL << 63
+const unsigned long long MSB_FLIP_MASK = 1ULL << (BITS_PER_NUM - 1);
 
 void chunked_radix_sort(vector<long long>& arr) {
     if (arr.empty()) return;
 
-    long long max_val = *max_element(arr.begin(), arr.end());
-    int max_chunks = count_chunks(max_val);
+    size_t n = arr.size();
+    vector<long long> output(n);
+    
+    // --- STEP 0: Initial MSB Flip (Pre-processing for signed sorting) ---
+    // XORing the MSB of all numbers maps the signed 'long long' array to a sortable 
+    // 'unsigned long long' array. This ensures that negative numbers (MSB=1)
+    // are treated as smaller than positive numbers (MSB=0) by the unsigned radix sort.
+    #pragma omp parallel for schedule(static)
+    for (size_t i = 0; i < n; ++i) {
+        // Safe conversion/manipulation via bitwise XOR
+        arr[i] = (long long)((unsigned long long)arr[i] ^ MSB_FLIP_MASK);
+    }
+    
+    // The sorting now happens on the transformed (MSB-flipped) data.
 
-    vector<long long> output(arr.size());
-
-    for (int chunk = 0; chunk < max_chunks; ++chunk) {
+    for (int chunk = 0; chunk < MAX_CHUNKS; ++chunk) {
         int n_threads = omp_get_max_threads();
+        // local_counts[t][b] stores the count of items belonging to bucket 'b' 
+        // that were processed by thread 't'.
         vector<vector<long long>> local_counts(n_threads, vector<long long>(BASE, 0));
 
-        // Parallel counting in blocks
+        // 1. Parallel Counting Phase (Distribution into temporary counts)
         #pragma omp parallel
         {
             int tid = omp_get_thread_num();
-            size_t n = arr.size();
             size_t block_size = (n + n_threads - 1) / n_threads;
             size_t start = tid * block_size;
             size_t end = min(start + block_size, n);
             vector<long long>& count = local_counts[tid];
-
+            
             // Loop unrolled counting
             size_t i = start;
             for (; i + UNROLL -1 < end; i += UNROLL) {
-                count[get_chunk(arr[i], chunk)]++;
-                count[get_chunk(arr[i+1], chunk)]++;
-                count[get_chunk(arr[i+2], chunk)]++;
-                count[get_chunk(arr[i+3], chunk)]++;
+                // Cast to unsigned before chunk extraction to correctly handle bits
+                count[get_chunk((unsigned long long)arr[i], chunk)]++;
+                count[get_chunk((unsigned long long)arr[i+1], chunk)]++;
+                count[get_chunk((unsigned long long)arr[i+2], chunk)]++;
+                count[get_chunk((unsigned long long)arr[i+3], chunk)]++;
             }
+            // Tail loop for remaining elements
             for (; i < end; ++i)
-                count[get_chunk(arr[i], chunk)]++;
+                count[get_chunk((unsigned long long)arr[i], chunk)]++;
         }
 
-        // Merge local counts
-        vector<long long> count(BASE, 0);
+        // 2. Serial Merge and Global Prefix Sum Phase
+        vector<long long> count(BASE, 0); // Global count vector
         for (int t = 0; t < n_threads; ++t)
             for (int i = 0; i < BASE; ++i)
-                count[i] += local_counts[t][i];
+                count[i] += local_counts[t][i]; // Merge local counts into global count
 
-        // Prefix sum
+        // Global Prefix sum
         for (int i = 1; i < BASE; ++i)
             count[i] += count[i-1];
 
-        // Build output array in blocks without atomics
-        vector<long long> positions = count;
+        // 3. Parallel Distribution Phase (Writing to the output array)
         #pragma omp parallel
         {
             int tid = omp_get_thread_num();
-            size_t n = arr.size();
             size_t block_size = (n + n_threads - 1) / n_threads;
             size_t start = tid * block_size;
             size_t end = min(start + block_size, n);
-            vector<long long> local_pos(BASE, 0);
+            vector<long long> local_pos(BASE, 0); 
 
-            // Compute local positions
+            // Calculate the non-atomic starting position (offset) for each bucket for this thread.
             for (int i = 0; i < BASE; ++i) {
                 long long sum = 0;
+                // Sum the counts of this bucket 'i' from ALL PREVIOUS threads (t < tid).
                 for (int t = 0; t < tid; ++t)
                     sum += local_counts[t][i];
+
                 local_pos[i] = (i == 0 ? 0 : count[i-1]) + sum;
             }
 
-            // Place numbers
+            // Place numbers into the correct, non-overlapping section of the output array.
             for (size_t i = start; i < end; ++i) {
-                int key = get_chunk(arr[i], chunk);
+                // Key extraction must use the unsigned representation
+                int key = get_chunk((unsigned long long)arr[i], chunk);
                 output[local_pos[key]++] = arr[i];
             }
         }
 
-        arr.swap(output);
+        arr.swap(output); // Prepare for the next pass.
+    }
+    
+    // --- STEP 4: Final MSB Flip (Post-processing to restore signed values) ---
+    // Reversing the XOR restores the original signed integers in sorted order.
+    #pragma omp parallel for schedule(static)
+    for (size_t i = 0; i < n; ++i) {
+        // Reverse the flip to restore the original signed integer
+        arr[i] = (long long)((unsigned long long)arr[i] ^ MSB_FLIP_MASK);
     }
 }
 
@@ -97,8 +123,8 @@ int main() {
     ios::sync_with_stdio(false);
     cin.tie(nullptr);
 
-    cout << "Ultimate Optimized Parallel Hybrid Chunked Counting Sort\n";
-    cout << "Enter numbers separated by spaces (Ctrl+D/Ctrl+Z to end):\n";
+    cout << "Ultimate Optimized Parallel Hybrid Chunked Counting Sort (Signed Support)\n";
+    cout << "Enter numbers (including negative) separated by spaces (Ctrl+D/Ctrl+Z to end):\n";
 
     vector<long long> numbers;
     long long x;
